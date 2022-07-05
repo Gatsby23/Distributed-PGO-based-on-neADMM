@@ -1,1 +1,463 @@
+function [r_history,s_history,x_hat,x,obj]=neADMM_Rotation(N,M,K,lambda)
 
+%============================ Initialization =============================%
+rng(0);
+folders_to_add = ...
+    {'initialization', 'math', 'methods', 'plotting', 'transformations'};
+for i = 1:length(folders_to_add)
+    addpath(genpath( folders_to_add{i} ));
+end
+
+%============================ Setting time steps =========================%
+s.dt = 0.005;
+s.steps = 101;
+s.tEnd = s.dt*s.steps;
+s.tspan = linspace(0,s.steps,s.steps)*s.tEnd/s.steps;
+tInd = 1;
+
+%====================== Pose graph initialization ========================%
+% Pose graph contains: {grid, sphere, circle, parking garage}
+init.pose = 'grid';
+initPoseGraph;
+
+%====================== Estimation initialization ========================%
+s.initType = 'gps';
+if strcmp(init.pose,'sesync_dataset') && strcmp(s.initType,'gps')
+   error('Error in main.m: gps initialization can not be used with sesync datasets');
+end
+
+%====================== Generating measurements ==========================%
+y.tau = 0.5; 
+y.ang_error = 30.0;
+initMeasurements;
+
+%====================== SE-Sync initialization ===========================%
+sesync_path = 'C:/Users/z5278062/OneDrive - UNSW/PhD Thesis/Programming/SE-Sync-master/MATLAB';
+addpath(genpath(sesync_path));
+sesync_comparison = false;
+
+%=================== Pose graph estimation initialization ================%
+if ~isfield(rob, 't_hat_d')
+    for i = 1:s.n
+        rob(i).t_hat_d = zeros(s.d,s.steps);
+        rob(i).R_hat_d = repmat(eye(s.d),1,1,s.steps);
+    end
+end
+s.mle_error_d = zeros(3,s.steps);
+s.dist_time = zeros(1,s.steps);
+
+x_hat=zeros(3,3,27);
+if ( ~isfield(init,'R') )
+    [t_hat,R_hat] = initPoseEst(s.initType,rob,s,measurements,y);
+    for i = 1:s.n
+        ind_i = (1:s.d)+(i-1)*s.d;
+        rob(i).t_hat_d(:,tInd) = t_hat(:,i);
+        rob(i).R_hat_d(:,:,tInd) = R_hat(:,ind_i);
+        init.t(:,i) = t_hat(:,i);  
+        init.R(:,ind_i) = R_hat(:,ind_i); 
+        x_hat(:,:,i)=rob(i).R_hat_d(:,:,tInd);
+    end
+else
+    for i = 1:s.n
+        
+        ind_i = (1:s.d)+(i-1)*s.d;
+        rob(i).t_hat_d(:,tInd) = init.t(:,i);
+        rob(i).R_hat_d(:,:,tInd) = init.R(:,ind_i);
+        x_hat{i}=rob(i).R_hat_d(:,:,tInd)
+    end
+end
+
+%========================== Defining dual variable =======================%
+ y1=0;
+ y2=zeros(s.d,s.d);
+ rng(0);
+ w=x_hat;
+ y3=zeros(s.d,s.d);
+ rho=1;
+ iter_max=100;
+ tolerance=10e-5;
+for i=1:1
+    i
+    w_old=w;
+    % update x_hat
+    x_hat=update_x(rho,w,y1,y3);
+    % update z
+    z=update_z(y2,rho,w);
+    % update w
+    w=update_w(w,x_hat,rho,y3,z,y2);
+    r1=norm(x_hat)^2-1;
+    r2=w-z;
+    r3=w-x_hat;
+    r=norm([r2;r3])
+    for i=1:27
+        s1=rho*(w_old(:,:,i)-w);
+    end
+    %s2=rho*(w_old-w);
+    s2=norm(s1)
+    y1=y1+rho*r1; 
+    y2=y2+rho*r2;
+    y3=y3+rho*r3;
+    r_history(i)=r
+    s_history(i)=s2
+    if(r<tolerance && s<tolerance)
+        break;
+    end
+end
+%x_hat=x_hat/norm(x_hat);
+ obj=object(x_hat);
+
+disp('==============================');
+
+for tInd = 2:s.steps
+    disp(['--- Time step ',num2str(tInd),' of ',num2str(s.steps),' ---']);
+    tic;
+
+ for i = 1:s.n
+        ind_i = (1:s.d)+(i-1)*s.d;
+        ind_m = find(s.M(:,1)==i);
+        m = size(ind_m,1);
+        ind_neighs = s.M(ind_m,2);
+        gamma = s.dt;
+        if ( m~=0 && tInd~=1 ) % if connected to neighbors
+            omega = zeros(s.d,1);
+                for e = ind_m'
+                    j = s.M(e,2);
+                    ind_j = (1:s.d)+(j-1)*s.d;
+                    omega = omega + ...
+                        logMap(rob(i).R_hat_d(:,:,tInd-1)'* ...
+                               rob(j).R_hat_d(:,:,tInd-1)* ...
+                               rob(i).y_R(:,ind_j,1)');
+                end
+                % rotation dynamics update
+                rob(i).R_hat_d(:,:,tInd) = ...
+                    rob(i).R_hat_d(:,:,tInd-1)*expMap(gamma*omega);
+             nu = zeros(s.d,1); % translation
+            for e = ind_m'
+                j = s.M(e,2);
+                % translation consensus term in world frame updates
+                % with built-in measurement averaging
+                nu = nu + ...
+                    rob(j).t_hat_d(:,tInd-1) - rob(i).t_hat_d(:,tInd-1) ...
+                    - 0.5*rob(i).R_hat_d(:,:,tInd-1)*rob(i).y_t(:,j,1) ...
+                    + 0.5*rob(j).R_hat_d(:,:,tInd-1)*rob(j).y_t(:,i,1);
+            end
+            % translation dynamics
+            rob(i).t_hat_d(:,tInd) = rob(i).t_hat_d(:,tInd-1) + gamma*nu;
+        end
+ end
+ s.dist_time(1,tInd) = toc;
+end
+disp(' ');
+disp('================================');
+disp(' ');
+
+
+% ======================== Computing PGO error ===========================%
+
+for tInd_ = 1:tInd
+    if exist('measurements_orig', 'var')
+        num_edges = min(size(measurements.edges,1), ...
+            size(measurements_orig.edges,1));
+    else
+        num_edges = size(measurements.edges,1);
+    end
+    w4=num_edges;
+    for e = 1:num_edges
+        i = measurements.edges(e,1);
+        ind_i = (1:s.d)+(i-1)*s.d;
+        j = measurements.edges(e,2);
+        ind_j = (1:s.d)+(j-1)*s.d;
+        w2=rob(i).R_hat_d(:,tInd);
+        t_error = ...
+            norm(rob(j).t_hat_d(:,tInd_) - rob(i).t_hat_d(:,tInd_) - ...
+                 rob(i).R_hat_d(:,:,tInd_)*measurements.t{e},2).^2;
+        R_error_sesync = ...
+            norm(rob(j).R_hat_d(:,:,tInd_) - ...
+                 rob(i).R_hat_d(:,:,tInd_)*measurements.R{e},'fro').^2;
+        R_error_geodesic = norm(logMap( ...
+            rob(i).R_hat_d(:,:,tInd_)'*rob(j).R_hat_d(:,:,tInd_)* ...
+            measurements.R{e}'),2).^2;
+%         s.mle_error_d(1,tInd_) = s.mle_error_d(1,tInd_) + ...
+%                                  measurements.tau{1,e}*t_error;
+        s.mle_error_d(2,tInd_) = s.mle_error_d(2,tInd_) + ...
+                                 measurements.kappa{1,e}*R_error_sesync;
+        s.mle_error_d(3,tInd_) = s.mle_error_d(3,tInd_) + ...
+                                 measurements.kappa{1,e}*R_error_geodesic;
+    end
+    w3=rob(i).R_hat_d(:,tInd);
+end
+
+%============================= Results =================================%
+
+disp('========== FINAL RESULTS ==========');
+disp(' ');
+
+% centralized results
+if sesync_comparison
+    disp('=== SE-Sync ===');
+    disp(' ');
+    disp('Did SE-Sync reach certified global chordal minimum?')
+    if abs(s.SDPval(1,1)-s.Fxhat(1,1))<1E-10
+        disp('    Yes');
+    else
+        disp('    No');
+    end
+    disp('Total time (seconds): ');
+    fprintf('    %.3f\n', SE_Sync_info.total_computation_time + s.cent_time);
+    disp('Chordal value: ');
+    fprintf('    %.3f\n', s.mle_error(1,1)+s.mle_error(2,1));
+    disp('Geodesic value: ');
+    fprintf('    %.3f\n', s.mle_error(1,1)+s.mle_error(3,1));
+end
+disp(' ');
+
+% distributed error results
+% compute values at convergence
+convergence_threshold = 1E-2; 
+mle_total = s.mle_error_d(1,:)+s.mle_error_d(3,:);
+mle_total_chord = s.mle_error_d(1,:)+s.mle_error_d(2,:);
+conv_ind = abs(diff(mle_total))>convergence_threshold;
+mle_total = mle_total(1,conv_ind==1);
+disp('====================================')
+disp(' ');
+disp('Total time/agent at convergence (seconds) :');
+fprintf('    %.3f\n', sum(s.dist_time(1,1:length(mle_total)))/s.n);
+disp('Total iterations at convergence: ');
+fprintf('    %.0f\n', length(mle_total));
+disp('Chordal value: ');
+fprintf('    %.3f\n', mle_total_chord(length(mle_total)));
+disp('Geodesic value: ');
+fprintf('    %.3f\n', mle_total(end));
+
+% Plot Estimation from Distributed SE-Sync
+plotResults;
+
+end
+
+function obj=object(x)
+s.dt = 0.025;
+s.steps = 101;
+s.tEnd = s.dt*s.steps;
+s.tspan = linspace(0,s.steps,s.steps)*s.tEnd/s.steps;
+tInd = 1;
+s.n=27;
+s.d=3;
+init.pose = 'grid';
+initPoseGraph;
+for tInd = 2:s.steps
+ for i=1:s.n
+     ind_i = (1:s.d)+(i-1)*s.d;
+     ind_m = find(s.M(:,1)==i);
+     m = size(ind_m,1);
+     ind_neighs = s.M(ind_m,2);
+     gamma = s.dt;
+     if ( m~=0 && tInd~=1 ) % if connected to neighbors
+         omega = zeros(s.d,1);
+         for i=1:27
+         rob(i).R_hat_d(:,:,tInd-1)=x(:,:,i);
+         end
+         for e = ind_m'
+             j = s.M(e,2);
+             ind_j = (1:s.d)+(j-1)*s.d;
+             omega = omega + (rob(i).R_hat_d(:,:,tInd-1)'* ...
+                               rob(j).R_hat_d(:,:,tInd-1)* ...
+                               rob(i).y_R(:,ind_j,1)');
+
+         end
+
+     end % if connected to neighbors
+ end  % for each robot
+ obj=norm(log(omega))^2;
+end
+end
+
+function z=update_z(y2,rho,w)
+for i=1:27
+    z=(rho*w(:,:,i)+y2)/rho;
+    temp=(rho*w(:,:,i)+y2)/(rho);
+    z(z<0)=temp(z<0);
+end
+end
+ function w=update_w(w0,x,rho,y3,z,y2)
+% solve the w update
+% via FISTA
+% global constants and defaults
+yw = 10e10;
+MAX_ITER = 1000;
+TOLERANCE =10e-6;
+w = w0;
+
+s.n=27;
+s.d=3;
+s.dt = 0.025;
+s.steps = 101;
+s.tEnd = s.dt*s.steps;
+s.tspan = linspace(0,s.steps,s.steps)*s.tEnd/s.steps;
+tInd = 1;
+init.pose = 'grid';
+initPoseGraph;
+
+% initialization pose graph optimization
+% initialization options include:
+% {'identity', 'random', 'gps', 'chordal', 'spanning_tree'};
+s.initType = 'gps';
+if strcmp(init.pose,'sesync_dataset') && strcmp(s.initType,'gps')
+   error('Error in main.m: gps initialization can not be used with sesync datasets');
+end
+
+% generate measurements if not using dataset
+y.tau = 0.5; % translation Gaussian error (meters)
+y.ang_error = 30.0; % Langevin covariance for rotation error (degrees)
+initMeasurements;
+
+tInd = 1;
+
+% initialize distributed estimation data structures
+if ~isfield(rob, 't_hat_d')
+    for i = 1:s.n
+        rob(i).t_hat_d = zeros(s.d,s.steps);
+        rob(i).R_hat_d = repmat(eye(s.d),1,1,s.steps);
+    end
+end
+s.mle_error_d = zeros(3,s.steps);
+s.dist_time = zeros(1,s.steps);
+
+% initialize estimates
+if ( ~isfield(init,'R') )
+    [t_hat,R_hat] = initPoseEst(s.initType,rob,s,measurements,y);
+    for i = 1:s.n
+        ind_i = (1:s.d)+(i-1)*s.d;
+        rob(i).t_hat_d(:,tInd) = t_hat(:,i);
+        rob(i).R_hat_d(:,:,tInd) = R_hat(:,ind_i);
+        init.t(:,i) = t_hat(:,i);  % save for other comparisons
+        init.R(:,ind_i) = R_hat(:,ind_i);  % save for other comparisons
+    end
+else
+    for i = 1:s.n
+        ind_i = (1:s.d)+(i-1)*s.d;
+        rob(i).t_hat_d(:,tInd) = init.t(:,i);
+        rob(i).R_hat_d(:,:,tInd) = init.R(:,ind_i);
+%         l9=rob(i).R_hat_d(:,:,tInd)
+    end
+end
+
+for tInd = 2:s.steps
+ for i=1:s.n
+     ind_i = (1:s.d)+(i-1)*s.d;
+     ind_m = find(s.M(:,1)==i);
+     m = size(ind_m,1);
+     ind_neighs = s.M(ind_m,2);
+     gamma = s.dt;
+     if ( m~=0 && tInd~=1 ) % if connected to neighbors
+         omega = zeros(s.d,1);
+         for e = ind_m'
+             j = s.M(e,2);
+             ind_j = (1:s.d)+(j-1)*s.d;
+             omega = omega + (rob(i).R_hat_d(:,:,tInd-1)'* ...
+                               rob(j).R_hat_d(:,:,tInd-1)* ...
+                               rob(i).y_R(:,ind_j,1)');
+
+         end
+         rob(i).R_hat_d(:,:,tInd) = rob(i).R_hat_d(:,:,tInd-1);
+         w=rob(i).R_hat_d(:,:,tInd);
+         R_j=rob(j).R_hat_d(:,:,tInd);
+         R_ij=rob(i).y_R(:,ind_j,1);
+
+     end % if connected to neighbors
+ end  % for each robot
+%  
+end
+for i=1:27
+    y = @(w) rho/2*norm(w-x(:,:,i)+y3/rho)^2+rho/2*norm(w-z+y2/rho)^2+norm(log(w'*R_j*R_ij'))^2;
+end
+lambda =1;
+zeta =w;
+eta = 10e-10;
+% FISTA
+for iter = 1:MAX_ITER
+    yw_old =yw;
+    yw = y(w);
+    if(abs(yw-yw_old)<TOLERANCE)
+        break;
+    end
+    lambda_old =lambda;
+    lambda =(1+sqrt(1+4*lambda^2))/2;
+    gamma =(1-lambda_old)/lambda;
+    for i=1:27
+    gradient=rho*(w-z+y2/rho)+rho*(w-x(:,:,i)+y3/rho);%+2*(log(w'*R_j*R_ij'))*(1/w');
+    end
+    zeta_old =zeta;
+    zeta0=zeta-eta*gradient;
+    zeta = max(abs(zeta0)-eta,0).*sign(zeta0);
+    w =(1-gamma)*zeta+gamma*zeta_old;
+end
+end
+function x=update_x(rho,w,y1,y3)
+% u=\Vert x\Vert
+% if u^2+1+y_1/rho>0
+    p=1+y1/rho;
+    C=w
+    for i=1:27
+        
+        ababababa=-norm(w(:,:,1))
+        q=-norm(2*(w(:,:,i)+y3/rho),2)
+    end
+    delta =(p/3)^3+(q/2)^2
+    if delta>0
+    A=nthroot(-q/2+sqrt(delta),3);
+    B=nthroot(-q/2-sqrt(delta),3);
+        u=A+B
+    else
+    A=(-q/2+delta^(1/2))^(1/3);
+    B=(-q/2-delta^(1/2))^(1/3);
+        % pay attention -sqrt(3)/2i=i*sqrt(3)/2;
+        omegaa=-1/2-sqrt(3)/2i;
+        u1 = A + B;
+        u2 = real(omegaa*A+omegaa^2*B);
+        u3 = real(omegaa^2*A+omegaa*B);
+        u=[u1,u2,u3];
+    end
+    u=u(u.^2+1+y1/rho>0);
+    x1=[];
+    if ~isempty(u)
+      for i=1:27
+    x1=2*(w(:,:,i)+y3/rho)/(u^2+1+y1/rho);
+      end
+    end
+ % else u^2+1+y_1/rho<0
+    p=1+y1/rho;
+    for i=1:27
+    q=norm(2*(w(:,:,i)+y3/rho),2);
+    end
+    delta =(p/3)^3+(q/2)^2
+    if delta>0
+    A=nthroot(-q/2+sqrt(delta),3);
+    B=nthroot(-q/2-sqrt(delta),3);
+        u=A+B;
+    else
+    A=(-q/2+delta^(1/2))^(1/3);
+    B=(-q/2-delta^(1/2))^(1/3);
+        % pay attention -sqrt(3)/2i=i*sqrt(3)/2;
+        omega=-1/2-sqrt(3)/2i;
+        u1 = A + B;
+        u2 = real(omega*A+omega^2*B);
+        u3 = real(omega^2*A+omega*B);
+        u=[u1,u2,u3];
+    end
+    u=u(u.^2+1+y1/rho<0)
+    x2=[];
+        if(~isempty(u))
+    for i=1:length(u)        
+    x2(:,i)=2*(w+y3/rho)./(u(i)^2+1+y1/rho);
+    end
+        end
+    x=[x1,x2];
+    for i=1:27
+    f=@(x) (norm(x,2)^2-1+y1/rho)^2+norm(w(:,:,i)-x+y3/rho,2)^2;
+    end
+    for i=1:size(x,2)
+        fval(i)=f(x(:,i));
+    end
+    [~,idx]=min(fval);
+    x=x(:,idx);
+end
