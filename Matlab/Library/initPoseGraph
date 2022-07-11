@@ -1,12 +1,7 @@
+%====================== Initializing pose graph ==========================%
 init.poseMean = zeros(3,1);
-
-% load pre-built se-sync data set
 if strcmp(init.pose,'sesync_dataset')
-    % 3d datasets include: 
-    % {'sphere2500','torus3D','grid3D','parking-garage','cubicle','rim'}
-    % 2d datasets include: 
-    % {'CSAIL', 'manhattan', 'city10000', 'intel', 'ais2klinik', 
-    %   'kitti_02'}
+
     init.dataset = 'parking-garage';
     init.data_dir = [sesync_path,'/data/'];
     init.data_dir = strcat(init.data_dir, init.dataset, '.g2o');
@@ -37,7 +32,7 @@ end
 
 
 
-% generate circle formation
+%======================= Circle formation ================================%
 elseif strcmp(init.pose,'circle')
     % initialize rob data structure
     s.d = 3; % dimension of the problem
@@ -76,7 +71,7 @@ end
         init.poseMean = init.poseMean + rob(i).t(:,tInd); % mean position
     end
 
-% generate grid formation
+%======================= Grid formation ================================%
 elseif strcmp(init.pose,'grid')
     % initialize rob data structure
     s.d = 3; % dimension of the problem
@@ -124,8 +119,8 @@ end
         end
     end
 
-% generate sphere formation
-% https://www.cmu.edu/biolphys/deserno/pdf/sphere_equi.pdf
+%======================= Sphere formation ================================%
+
 x=zeros(3,3,27);
 elseif strcmp(init.pose,'sphere')
     % initialize rob data structure
@@ -204,7 +199,7 @@ end
 
 %% Finalize Initialization of Graph Structures
 
-if ( s.gt_bool && ~strcmp(init.pose,'experiment') )
+if ( s.gt_bool)
     % center initial conditions
     init.poseMean = init.poseMean/s.n;
     for i = 1:s.n
