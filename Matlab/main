@@ -119,38 +119,25 @@ for tInd = 2:s.steps
         ind_neighs = s.M(ind_m,2);
         gamma = s.dt;
         if ( m~=0 && tInd~=1 ) % if connected to neighbors
-            omega = zeros(s.d,1);
+            Ro = zeros(s.d,1);
                 for e = ind_m'
                     j = s.M(e,2);
                     ind_j = (1:s.d)+(j-1)*s.d;
-                    omega = omega + ...
-                        logMap(rob(i).R_hat_d(:,:,tInd-1)'* ...
-                               rob(j).R_hat_d(:,:,tInd-1)* ...
-                               rob(i).y_R(:,ind_j,1)');
+                    Ro = Ro + logMap(rob(i).R_hat_d(:,:,tInd-1)'* rob(j).R_hat_d(:,:,tInd-1)*rob(i).y_R(:,ind_j,1)');
                 end
-                % rotation dynamics update
-                rob(i).R_hat_d(:,:,tInd) = ...
-                    rob(i).R_hat_d(:,:,tInd-1)*expMap(gamma*omega);
-             nu = zeros(s.d,1); % translation
+                % rotation update
+                rob(i).R_hat_d(:,:,tInd) = rob(i).R_hat_d(:,:,tInd-1)*expMap(gamma*Ro);
+             Tr = zeros(s.d,1); % translation
             for e = ind_m'
                 j = s.M(e,2);
-                % translation consensus term in world frame updates
-                % with built-in measurement averaging
-                nu = nu + ...
-                    rob(j).t_hat_d(:,tInd-1) - rob(i).t_hat_d(:,tInd-1) ...
-                    - 0.5*rob(i).R_hat_d(:,:,tInd-1)*rob(i).y_t(:,j,1) ...
-                    + 0.5*rob(j).R_hat_d(:,:,tInd-1)*rob(j).y_t(:,i,1);
+                Tr = Tr + rob(j).t_hat_d(:,tInd-1) - rob(i).t_hat_d(:,tInd-1)- rob(j).R_hat_d(:,:,tInd-1)*rob(j).y_t(:,i,1);
             end
-            % translation dynamics
-            rob(i).t_hat_d(:,tInd) = rob(i).t_hat_d(:,tInd-1) + gamma*nu;
+            % translation update
+            rob(i).t_hat_d(:,tInd) = rob(i).t_hat_d(:,tInd-1) + gamma*Tr;
         end
  end
  s.dist_time(1,tInd) = toc;
 end
-disp(' ');
-disp('================================');
-disp(' ');
-
 
 % ======================== Computing PGO error ===========================%
 
@@ -168,21 +155,10 @@ for tInd_ = 1:tInd
         j = measurements.edges(e,2);
         ind_j = (1:s.d)+(j-1)*s.d;
         w2=rob(i).R_hat_d(:,tInd);
-        t_error = ...
-            norm(rob(j).t_hat_d(:,tInd_) - rob(i).t_hat_d(:,tInd_) - ...
-                 rob(i).R_hat_d(:,:,tInd_)*measurements.t{e},2).^2;
-        R_error_sesync = ...
-            norm(rob(j).R_hat_d(:,:,tInd_) - ...
-                 rob(i).R_hat_d(:,:,tInd_)*measurements.R{e},'fro').^2;
-        R_error_geodesic = norm(logMap( ...
-            rob(i).R_hat_d(:,:,tInd_)'*rob(j).R_hat_d(:,:,tInd_)* ...
-            measurements.R{e}'),2).^2;
-%         s.mle_error_d(1,tInd_) = s.mle_error_d(1,tInd_) + ...
-%                                  measurements.tau{1,e}*t_error;
-        s.mle_error_d(2,tInd_) = s.mle_error_d(2,tInd_) + ...
-                                 measurements.kappa{1,e}*R_error_sesync;
-        s.mle_error_d(3,tInd_) = s.mle_error_d(3,tInd_) + ...
-                                 measurements.kappa{1,e}*R_error_geodesic;
+        t_error = norm(rob(j).t_hat_d(:,tInd_) - rob(i).t_hat_d(:,tInd_) -rob(i).R_hat_d(:,:,tInd_)*measurements.t{e},2).^2;
+        R_error_sesync = norm(rob(j).R_hat_d(:,:,tInd_) -rob(i).R_hat_d(:,:,tInd_)*measurements.R{e},'fro').^2;
+        R_error_geodesic = norm(logMap(rob(i).R_hat_d(:,:,tInd_)'*rob(j).R_hat_d(:,:,tInd_)*measurements.R{e}'),2).^2;
+        s.mle_error_d(3,tInd_) = s.mle_error_d(3,tInd_) + measurements.kappa{1,e}*R_error_geodesic;
     end
     w3=rob(i).R_hat_d(:,tInd);
 end
@@ -211,8 +187,7 @@ if sesync_comparison
 end
 disp(' ');
 
-% distributed error results
-% compute values at convergence
+%==================== Compute distributed error =========================%
 convergence_threshold = 1E-2; 
 mle_total = s.mle_error_d(1,:)+s.mle_error_d(3,:);
 mle_total_chord = s.mle_error_d(1,:)+s.mle_error_d(2,:);
@@ -229,11 +204,10 @@ fprintf('    %.3f\n', mle_total_chord(length(mle_total)));
 disp('Geodesic value: ');
 fprintf('    %.3f\n', mle_total(end));
 
-% Plot Estimation from Distributed SE-Sync
 plotResults;
 
 end
-
+%============================ Defining functions ==============================%
 function obj=object(x)
 s.dt = 0.025;
 s.steps = 101;
