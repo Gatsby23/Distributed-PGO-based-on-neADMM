@@ -323,13 +323,11 @@ for tInd = 2:s.steps
      ind_neighs = s.M(ind_m,2);
      gamma = s.dt;
      if ( m~=0 && tInd~=1 ) % if connected to neighbors
-         omega = zeros(s.d,1);
+         Ro = zeros(s.d,1);
          for e = ind_m'
              j = s.M(e,2);
              ind_j = (1:s.d)+(j-1)*s.d;
-             omega = omega + (rob(i).R_hat_d(:,:,tInd-1)'* ...
-                               rob(j).R_hat_d(:,:,tInd-1)* ...
-                               rob(i).y_R(:,ind_j,1)');
+             Ro = Ro + logMap(rob(i).R_hat_d(:,:,tInd-1)'* rob(j).R_hat_d(:,:,tInd-1)*rob(i).y_R(:,ind_j,1)');
 
          end
          rob(i).R_hat_d(:,:,tInd) = rob(i).R_hat_d(:,:,tInd-1);
