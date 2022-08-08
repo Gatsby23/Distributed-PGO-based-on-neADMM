@@ -204,7 +204,7 @@ fprintf('    %.3f\n', mle_total_chord(length(mle_total)));
 disp('Geodesic value: ');
 fprintf('    %.3f\n', mle_total(end));
 
-plotResults;
+plot;
 
 end
 %============================ Defining functions ==============================%
