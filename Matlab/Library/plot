@@ -1,0 +1,179 @@
+%% Plot Results
+
+%========================== Ploting features ============================%
+p.R_plot_w = eye(3); 
+p.cVec = colormap; 
+p.cInd = ceil(linspace(1,64,s.n));
+p.arrowLength = 0.25; 
+p.gtAlpha = 1; 
+p.estAlpha = 1; 
+p.commColor = [0.5*ones(1,3),p.gtAlpha];
+p.commEstColor = [0.5*ones(1,3),p.gtAlpha]; 
+p.maxPlotN = 251;
+
+p.plotViewValues = [-1,-1.7,0.8];
+if strcmp(init.pose, 'random')
+%     p.plotViewValues = [71, 30];
+elseif strcmp(init.pose, 'circle')
+%     p.plotViewValues = [71, 88];
+elseif strcmp(init.pose, 'sesync_dataset')
+    p.plotViewValues = [-91.7361, 33.1815];
+end
+
+
+%====================== Ground Truth ===========================%
+
+if s.gt_bool
+    
+    figure(1);
+    clf(1);
+    titleString = 'Ground Truth';
+    hold on;
+% ======= World reference frame ======%
+%     h = plotCoordSys([0; 0; 0; 0; 0; 0], 'world', 50, [1,1,1], 0, 1, 2);
+    
+% ======= communication network =====%
+    for e = 1:s.m
+        i = s.M(e,1);
+        j = s.M(e,2);
+        x_pts = [rob(i).t(1,1); rob(j).t(1,1)];
+        y_pts = [rob(i).t(2,1); rob(j).t(2,1)];
+        z_pts = [rob(i).t(3,1); rob(j).t(3,1)];
+        plot3(x_pts,y_pts,z_pts, ...
+            'Color',p.commColor,'LineStyle','-');
+    end
+    
+%======= Robot coordinate systems ======%
+    if ( s.n<p.maxPlotN )
+        for i = 1:s.n
+            % for coordinate system labels
+            % plotCoordSys([rob(i).t(:,tInd);rot2euler(rob(i).R(:,:,tInd))], ...
+            %              num2str(i), 0, p.cVec(p.cInd(i),:), p.gtAlpha, p.arrowLength, 2);
+            % no coordinate system labels
+            plotCoordSys([rob(i).t(:,1);rot2euler(rob(i).R(:,:,1))], ...
+                '', 1, p.cVec(p.cInd(i),:), p.gtAlpha, p.arrowLength, 2);
+        end
+    end
+    hold off;
+    box on;
+    rotate3d on;
+    axis equal;
+    view(p.plotViewValues);
+    title(titleString,'Interpreter','LaTex');
+    % define plot volume
+    p.plotVol = zeros(1,6);
+    min_bound = 1E6*ones(3,1);
+    max_bound = -1E6*ones(3,1);
+    for i = 1:s.n
+        ind = find(rob(i).t(:)<min_bound);
+        for j = ind'
+            p.plotVol((j-1)*2+1) = rob(i).t(j,1);
+            min_bound(j) = rob(i).t(j,1);
+        end
+        ind = find(rob(i).t(:)>max_bound);
+        for j = ind'
+            p.plotVol((j-1)*2+2) = rob(i).t(j,1);
+            max_bound(j) = rob(i).t(j,1);
+        end
+    end
+    offset = 0.1;
+    p.plotVol = p.plotVol + [-offset,offset,-offset,offset,-offset,offset];
+    axis(p.plotVol);
+%     axis off; % to hide axes and background
+    
+end
+
+%=============== Distributed PGO results ======================%
+
+figure(2);
+clf(2);
+titleString = 'neADMM PGO Result';
+hold on;
+robInd = 1; % plot estimate from robInd's perspective
+p.robInd_t = zeros(s.d,1);
+p.robInd_R = eye(s.d);
+if ( s.gt_bool==1 ) % translate estimate if ground truth is available
+    p.robInd_t = rob(robInd).t(:,1);
+    p.robInd_R = rob(robInd).R(:,:,1);
+else
+    p.robInd_t = rob(robInd).t_hat_d(:,1);
+    ind_robInd = (1:s.d)+(robInd-1)*s.d;
+    p.robInd_R = rob(robInd).R_hat_d(:,:,1);
+end
+
+% build a spanning tree through via bredth first search
+% to visualize distributed estimate results
+rootInd = robInd;
+if ( ~exist('s.G','var') )
+    s = buildSpanningTree(s,rootInd);
+end
+[p.rob.t_plot,p.rob.R_plot] = spanningTreeTransformations(s,rob,rootInd,tInd,0);
+
+% robot's estimate to plot
+i = robInd;
+ind_i = (1:s.d)+(i-1)*s.d;
+% transform estimation about frame i in world frame for comparison
+t_trans = p.robInd_t - p.rob.t_plot(:,i);
+R_trans = p.rob.R_plot(:,ind_i)'*p.robInd_R;
+[p.t_cur, p.R_cur] = ...
+    rigidBodyTrans(p.rob.t_plot,p.rob.R_plot,t_trans,R_trans,i);
+%    p.t_cur = p.rob.t_plot;
+%    p.R_cur = p.rob.R_plot;
+% remove agents with no estimate from ith point of view
+zeroInd = find(p.rob.t_plot(1,:)==0); % indices to remove from lack of relative measurement
+zeroInd(zeroInd==i) = [];
+% plot communication network
+for e = 1:s.m
+    i = s.M(e,1);
+    j = s.M(e,2);
+    x_pts = [p.t_cur(1,i); p.t_cur(1,j)];
+    y_pts = [p.t_cur(2,i); p.t_cur(2,j)];
+    if ( s.d==2 )
+        plot(x_pts,y_pts, ...
+            'Color','b','LineStyle','-','LineWidth',1);
+    else
+        z_pts = [p.t_cur(3,i); p.t_cur(3,j)];
+        plot3(x_pts,y_pts,z_pts, ...
+            'Color','b','LineStyle','-');
+    end
+end
+% plot coordinate systems
+if ( s.n<p.maxPlotN )
+    for ii = 1:s.n
+        if ( any(p.t_cur(:,ii)~=0) && ~any(ii==zeroInd) )
+            ind_ii = (1:s.d)+(ii-1)*s.d;
+            % for coordinate system labels
+            % plotCoordSys([p.t_cur(:,ii);rot2euler(p.R_cur(:,ind_ii))], ...
+            %              ['$\hat{',num2str(ii),'}$'], 50, p.cVec(p.cInd(ii),:), p.estAlpha, 1.0*p.arrowLength, 2);
+            % no coordinate system labels
+            plotCoordSys([p.t_cur(:,ii);rot2euler(p.R_cur(:,ind_ii))], ...
+                'Color', 0, p.cVec(p.cInd(ii),:), p.estAlpha, 1.0*p.arrowLength, 2);
+        end
+    end
+end
+hold off;
+box on;
+rotate3d on;
+axis equal;
+view(p.plotViewValues);
+title(titleString,'Interpreter','LaTex');
+% define plot volume
+p.plotVol = zeros(1,6);
+min_bound = 1E6*ones(3,1);
+max_bound = -1E6*ones(3,1);
+for i = 1:s.n
+    ind = find(p.t_cur(:,i)<min_bound);
+    for j = ind'
+        p.plotVol((j-1)*2+1) = p.t_cur(j,i);
+        min_bound(j) = p.t_cur(j,i);
+    end
+    ind = find(p.t_cur(:,i)>max_bound);
+    for j = ind'
+        p.plotVol((j-1)*2+2) = p.t_cur(j,i);
+        max_bound(j) = p.t_cur(j,i);
+    end
+end
+offset = 0.1;
+p.plotVol = p.plotVol + [-offset,offset,-offset,offset,-offset,offset];
+axis(p.plotVol);
+
